@@ -171,7 +171,7 @@ io.on("connection", (socket: Socket) => {
   });
 });
 
-httpServer.listen(PORT, '0.0.0.0', () => {
+httpServer.listen(PORT, () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
 
