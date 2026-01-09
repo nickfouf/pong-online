@@ -14,7 +14,7 @@ const io = new Server(httpServer, {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Room Data
 interface GameRoom {
