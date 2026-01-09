@@ -1,7 +1,7 @@
 import { io, Socket } from "socket.io-client";
 import { MatchInitData, ClientInput, GameState } from "../game/types";
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || `${window.location.protocol}//${window.location.hostname}:${window.location.port}`;
+const SERVER_URL = import.meta.env.VITE_SERVER_URL ? "https://pong-online-rs91.onrender.com" : `${window.location.protocol}//${window.location.hostname}:${window.location.port}`;
 export let socket: Socket;
 
 export const initSocket = () => {
