@@ -10,7 +10,7 @@ import {
     onSyncEvent, 
     sendInput,
     onGameOver,
-    onDisconnect // <--- Import this
+    onDisconnect
 } from "./lib/socket";
 
 // Fixed Step Constants
@@ -41,7 +41,6 @@ const MS_PER_TICK = 1000 / TICK_RATE;
   window.addEventListener('resize', () => {
       renderer.resize();
   });
-  // Trigger once to set initial size
   renderer.resize();
   
   // --- CLIENT GAME STATE ---
@@ -76,7 +75,6 @@ const MS_PER_TICK = 1000 / TICK_RATE;
     roomId = data.roomId;
     gameActive = true;
     
-    // Hide UI, show Game
     renderer.hideUI();
     renderer.setMirrored(myRole === 'p2');
 
@@ -125,11 +123,9 @@ const MS_PER_TICK = 1000 / TICK_RATE;
     });
   });
 
-  // --- NEW LISTENER: Local Disconnect ---
   onDisconnect((reason) => {
       if (gameActive) {
           gameActive = false;
-          // The server destroys the match on disconnect, so we must show Game Over.
           renderer.showGameOver(`You were disconnected (${reason})`, () => {
               window.location.reload();
           });
@@ -138,8 +134,6 @@ const MS_PER_TICK = 1000 / TICK_RATE;
 
   // --- GAME LOOP ---
   app.ticker.add(() => {
-    // If game isn't active, we might still be animating the UI (handled internally by Pixi), 
-    // so we just return here regarding physics.
     if (!gameActive || !simulatedState || !roomId || !myRole) return;
 
     const now = performance.now();
@@ -152,43 +146,36 @@ const MS_PER_TICK = 1000 / TICK_RATE;
         
         let wantsLogicLeft = false;
         let wantsLogicRight = false;
+        let targetX: number | undefined = undefined;
 
         // 1. Pointer (Touch/Mouse) Input
+        // If pointer is active, we send absolute position
         if (renderer.pointerActive) {
-            const myEntity = simulatedState.entities[myRole];
-            const paddleCenter = myEntity.position.x + myEntity.width / 2;
-            const target = renderer.targetGameX;
-            const diff = target - paddleCenter;
-
-            // Deadzone to stop jitter when reaching finger
-            if (diff < -10) {
-                wantsLogicLeft = true;
-            } else if (diff > 10) {
-                wantsLogicRight = true;
-            }
+            targetX = renderer.targetGameX;
         } 
-        // 2. Keyboard Input (Fallback if no touch active)
+        // 2. Keyboard Input (Fallback)
         else {
             if (myRole === 'p1') {
-                // P1: Left Key = Left Logic, Right Key = Right Logic
                 wantsLogicLeft = keys.left;
                 wantsLogicRight = keys.right;
             } else {
-                // P2: Left Key = Right Logic, Right Key = Left Logic (Due to 180 flip)
                 wantsLogicLeft = keys.right;
                 wantsLogicRight = keys.left;
             }
         }
 
-        const myInput = { 
+        const myInput: ClientInput = { 
             tick: currentTick, 
             left: wantsLogicLeft, 
-            right: wantsLogicRight 
+            right: wantsLogicRight,
+            targetX: targetX
         };
 
+        // Check change (include targetX in check)
         const inputChanged = !lastSentInput || 
             lastSentInput.left !== myInput.left || 
-            lastSentInput.right !== myInput.right;
+            lastSentInput.right !== myInput.right ||
+            lastSentInput.targetX !== myInput.targetX;
 
         if (inputChanged) {
             sendInput(roomId, myInput);
@@ -216,4 +203,3 @@ const MS_PER_TICK = 1000 / TICK_RATE;
   window.addEventListener("keyup", (e) => handleKey(e, false));
 
 })();
-

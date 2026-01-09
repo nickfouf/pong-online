@@ -3,7 +3,8 @@ import { GameState, Entity, ClientInput, GAME_WIDTH, GAME_HEIGHT, STEP_TIME } fr
 const PADDLE_WIDTH = 100;
 const PADDLE_HEIGHT = 20;
 const BALL_SIZE = 20;
-const PADDLE_SPEED = 400; 
+// Increased speed significantly for "instant" feel (was 400)
+const PADDLE_SPEED = 1500; 
 export const BALL_SPEED = 450; 
 
 // --- DETERMINISTIC PRNG HELPER FUNCTIONS ---
@@ -21,9 +22,7 @@ function deterministicRandomInt(index: number, seed: number, min: number, max: n
     const input = BigInt(index) + (BigInt(seed) * 0x10000n);
     const h = splitmix64(input);
 
-    // --- THE FIX ---
     // Apply a mask of 64 ones (0xFFFFFFFFFFFFFFFFn)
-    // This effectively casts the BigInt to an unsigned 64-bit integer (always positive).
     const unsignedVal = h & 0xFFFFFFFFFFFFFFFFn;
 
     return Number(unsignedVal % range) + min;
@@ -33,7 +32,6 @@ function deterministicRandomInt(index: number, seed: number, min: number, max: n
 function deterministicRandomFloat(index: number, seed: number): number {
   const input = BigInt(index) + (BigInt(seed) * 0x10000n);
   const h = splitmix64(input);
-  // Mask to 53 bits for safe double precision, then divide by max value
   const mask = 0x1FFFFFFFFFFFFFn;
   return Number(h & mask) / Number(mask);
 }
@@ -70,7 +68,6 @@ export class GameEngine {
           id: "ball",
           type: "ball",
           position: { x: GAME_WIDTH / 2 - BALL_SIZE / 2, y: GAME_HEIGHT / 2 },
-          // Init with 0 velocity, the step() function will kick it off
           velocity: { x: 0, y: 0 }, 
           width: BALL_SIZE,
           height: BALL_SIZE,
@@ -93,24 +90,15 @@ export class GameEngine {
     state.tick++;
 
     // 0. AUTO START
-    // If ball is stopped (start of game), kick it immediately.
     if (ball.velocity.x === 0 && ball.velocity.y === 0) {
         this.resetBall(state); 
     }
 
-    // 1. Process P1
-    if (p1Input) {
-        if (p1Input.left) p1.position.x -= PADDLE_SPEED * STEP_TIME;
-        if (p1Input.right) p1.position.x += PADDLE_SPEED * STEP_TIME;
-    }
-    p1.position.x = Math.max(0, Math.min(GAME_WIDTH - p1.width, p1.position.x));
+    // 1. Process P1 Input
+    this.processPaddle(p1, p1Input);
 
-    // 2. Process P2
-    if (p2Input) {
-        if (p2Input.left) p2.position.x -= PADDLE_SPEED * STEP_TIME;
-        if (p2Input.right) p2.position.x += PADDLE_SPEED * STEP_TIME;
-    }
-    p2.position.x = Math.max(0, Math.min(GAME_WIDTH - p2.width, p2.position.x));
+    // 2. Process P2 Input
+    this.processPaddle(p2, p2Input);
 
     // 3. Ball Movement
     ball.position.x += ball.velocity.x * STEP_TIME;
@@ -128,17 +116,46 @@ export class GameEngine {
     // 5. Scoring
     if (ball.position.y <= 0) {
       state.score.player++;
-      state.rounds++; // <--- Increment Round Counter
+      state.rounds++;
       this.resetBall(state);
     } else if (ball.position.y + ball.height >= GAME_HEIGHT) {
       state.score.opponent++;
-      state.rounds++; // <--- Increment Round Counter
+      state.rounds++;
       this.resetBall(state);
     }
 
     // 6. Paddle Collisions
     this.checkPaddleCollision(ball, p1);
     this.checkPaddleCollision(ball, p2);
+  }
+
+  // Helper to handle both Keyboard (Boolean) and Touch (Absolute) inputs
+  private processPaddle(paddle: Entity, input: ClientInput | undefined) {
+    if (!input) return;
+
+    // A. Absolute Position Logic (Touch/Mouse)
+    if (input.targetX !== undefined) {
+        // We want the CENTER of the paddle to match targetX
+        const currentCenterX = paddle.position.x + paddle.width / 2;
+        const diff = input.targetX - currentCenterX;
+        const maxStep = PADDLE_SPEED * STEP_TIME;
+
+        // If close enough, snap exactly to target to prevent jitter
+        if (Math.abs(diff) <= maxStep) {
+            paddle.position.x += diff;
+        } else {
+            // Move towards target at max speed
+            paddle.position.x += Math.sign(diff) * maxStep;
+        }
+    } 
+    // B. Relative Logic (Keyboard)
+    else {
+        if (input.left) paddle.position.x -= PADDLE_SPEED * STEP_TIME;
+        if (input.right) paddle.position.x += PADDLE_SPEED * STEP_TIME;
+    }
+
+    // Clamp to screen bounds
+    paddle.position.x = Math.max(0, Math.min(GAME_WIDTH - paddle.width, paddle.position.x));
   }
 
   private checkPaddleCollision(ball: Entity, paddle: Entity) {
@@ -164,20 +181,9 @@ export class GameEngine {
     ball.position.x = GAME_WIDTH / 2 - ball.width / 2;
     ball.position.y = GAME_HEIGHT / 2;
     
-    // DETERMINISTIC VELOCITY START
-    // We use the Master Seed + Current Round Index
-    
-    // 1. Determine direction Y (Up or Down)
-    // We use index = state.rounds * 10 to get a unique hash per aspect of the round
     const dirVal = deterministicRandomInt(state.rounds * 10, state.seed, 0, 1);
     const directionY = dirVal === 0 ? -1 : 1;
-
-    // 2. Determine angle X (Left or Right drift)
-    // Use offset index (*10 + 1)
     const angleMod = deterministicRandomFloat(state.rounds * 10 + 1, state.seed); 
-    
-    // Result: X velocity is randomly distributed between -80% and +80% of forward speed
-    // angleMod is 0.0 to 1.0 -> (angleMod - 0.5) is -0.5 to 0.5 -> * 1.6 is -0.8 to 0.8
     const velocityX = (angleMod - 0.5) * 1.6 * BALL_SPEED;
 
     ball.velocity.y = directionY * BALL_SPEED;
