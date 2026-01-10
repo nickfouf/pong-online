@@ -23,7 +23,8 @@ interface GameRoom {
   state: GameState; 
   p1Input: ClientInput | undefined;
   p2Input: ClientInput | undefined;
-  gameLoop: NodeJS.Timeout | null;
+  // We no longer need to store a setInterval ID because the loop checks 
+  // if the room exists in the map to decide whether to continue.
 }
 
 const rooms = new Map<string, GameRoom>();
@@ -41,65 +42,82 @@ io.on("connection", (socket: Socket) => {
             const p2 = socket.id;
             waitingPlayer = null;
 
-            // --- FIX: ADD PLAYERS TO THE SOCKET.IO ROOM ---
             const p1Socket = io.sockets.sockets.get(p1);
-            const p2Socket = socket; // Current socket is p2
+            const p2Socket = socket; 
 
             if (p1Socket) p1Socket.join(roomId);
             p2Socket.join(roomId);
-            // ----------------------------------------------
 
             const matchSeed = Math.floor(Math.random() * 2000000000);
             const initialState = engine.createInitialState(matchSeed);
 
-      const room: GameRoom = {
-        id: roomId,
-        p1, 
-        p2,
-        state: initialState,
-        p1Input: undefined,
-        p2Input: undefined,
-        gameLoop: null
-      };
+            const room: GameRoom = {
+                id: roomId,
+                p1, 
+                p2,
+                state: initialState,
+                p1Input: undefined,
+                p2Input: undefined
+            };
 
-      rooms.set(roomId, room);
+            rooms.set(roomId, room);
 
-      const MS_PER_TICK = 1000 / TICK_RATE;
-      const matchStartTime = Date.now();
+            // --- CHANGED: HIGH PRECISION RECURSIVE LOOP ---
+            // This replaces setInterval with a more accurate game loop 
+            // similar to requestAnimationFrame logic but for server time.
+            
+            const TICK_LENGTH_MS = 1000 / TICK_RATE;
+            let previousTick = Date.now();
 
-      room.gameLoop = setInterval(() => {
-        const now = Date.now();
-        const expectedTick = Math.floor((now - matchStartTime) / MS_PER_TICK);
-        let loopCount = 0;
+            const runGameLoop = () => {
+                // 1. Stop condition: If room was deleted (game over), stop looping
+                if (!rooms.has(roomId)) return;
 
-        while (room.state.tick < expectedTick && loopCount < 50) {
-            engine.step(room.state, room.p1Input, room.p2Input);
-            loopCount++;
+                const now = Date.now();
+
+                // 2. Fixed Time Step Logic
+                // If the server lags, this 'while' loop runs multiple physics steps
+                // to catch up, ensuring the simulation speed remains constant.
+                while (previousTick + TICK_LENGTH_MS <= now) {
+                    engine.step(room.state, room.p1Input, room.p2Input);
+                    previousTick += TICK_LENGTH_MS;
+                }
+
+                // 3. Recursive Scheduling
+                // Calculate time until next expected tick
+                const timeUntilNext = (previousTick + TICK_LENGTH_MS) - Date.now();
+
+                if (timeUntilNext > 1) {
+                    // If we have plenty of time, use setTimeout to yield CPU
+                    setTimeout(runGameLoop, timeUntilNext);
+                } else {
+                    // If we are late or due immediately, use setImmediate
+                    // (Node's way of saying "do this as soon as possible")
+                    setImmediate(runGameLoop);
+                }
+            };
+
+            // Start the loop
+            runGameLoop();
+            // ----------------------------------------------
+
+            const matchStartTime = Date.now();
+            io.to(p1).emit("match-start", { role: "p1", roomId, serverTime: matchStartTime, seed: matchSeed });
+            io.to(p2).emit("match-start", { role: "p2", roomId, serverTime: matchStartTime, seed: matchSeed });
+
+            console.log(`Match started: ${roomId}`);
+
+        } else {
+            waitingPlayer = socket.id;
+            console.log(`User ${socket.id} joined waiting room.`);
         }
+    });
 
-        // Broadcast authoritative state
-        io.to(roomId).emit("server-tick", room.state);
-
-      }, MS_PER_TICK);
-
-      io.to(p1).emit("match-start", { role: "p1", roomId, serverTime: matchStartTime, seed: matchSeed });
-      io.to(p2).emit("match-start", { role: "p2", roomId, serverTime: matchStartTime, seed: matchSeed });
-
-      console.log(`Match started: ${roomId}`);
-
-    } else {
-      waitingPlayer = socket.id;
-      console.log(`User ${socket.id} joined waiting room.`);
-    }
-  });
-
-  // --- DEBUGGING INPUT ---
   socket.on("player-input", (data: { roomId: string, input: ClientInput }) => {
     const room = rooms.get(data.roomId);
     if (!room) return;
 
-    // Log the first few inputs to verify connection
-    if (Math.random() < 0.05) { // Don't spam logs, just 5% of inputs
+    if (Math.random() < 0.05) { 
         console.log(`Rx Input Room ${data.roomId.substring(0,8)} from ${socket.id === room.p1 ? "P1" : "P2"}: T:${data.input.tick} X:${data.input.targetX}`);
     }
 
@@ -108,6 +126,12 @@ io.on("connection", (socket: Socket) => {
     } else {
         room.p2Input = data.input;
     }
+
+    // --- CHANGED: SEND STATE ON INPUT ---
+    // We only broadcast the state when an input is processed.
+    // The clients rely on local simulation for the ball in between these updates.
+    io.to(data.roomId).emit("server-tick", room.state);
+    // ------------------------------------
   });
 
   socket.on("disconnect", () => {
@@ -116,8 +140,10 @@ io.on("connection", (socket: Socket) => {
 
     for (const [id, room] of rooms) {
       if (room.p1 === socket.id || room.p2 === socket.id) {
-        if (room.gameLoop) clearInterval(room.gameLoop);
+        // We just delete the room. The recursive loop checks rooms.has(id),
+        // so it will automatically stop running on the next tick.
         rooms.delete(id);
+        
         io.to(room.p1).emit("game-over", "Opponent disconnected");
         io.to(room.p2).emit("game-over", "Opponent disconnected");
       }
