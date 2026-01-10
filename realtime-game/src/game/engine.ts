@@ -3,11 +3,10 @@ import { GameState, Entity, ClientInput, GAME_WIDTH, GAME_HEIGHT, STEP_TIME } fr
 const PADDLE_WIDTH = 100;
 const PADDLE_HEIGHT = 20;
 const BALL_SIZE = 20;
-// Increased speed significantly for "instant" feel (was 400)
-const PADDLE_SPEED = 1500; 
+// CHANGED: Reduced from 1500 to 600 to match server
+const PADDLE_SPEED = 600; 
 export const BALL_SPEED = 450; 
 
-// --- DETERMINISTIC PRNG HELPER FUNCTIONS ---
 function splitmix64(x: bigint): bigint {
   x = BigInt(x);
   x += 0x9e3779b97f4a7c15n;
@@ -16,26 +15,20 @@ function splitmix64(x: bigint): bigint {
   return x ^ (x >> 31n);
 }
 
-// Generates a deterministic integer between min and max (inclusive)
 function deterministicRandomInt(index: number, seed: number, min: number, max: number): number {
     const range = BigInt(max - min + 1);
     const input = BigInt(index) + (BigInt(seed) * 0x10000n);
     const h = splitmix64(input);
-
-    // Apply a mask of 64 ones (0xFFFFFFFFFFFFFFFFn)
     const unsignedVal = h & 0xFFFFFFFFFFFFFFFFn;
-
     return Number(unsignedVal % range) + min;
 }
 
-// Generates a deterministic float (0.0 to 1.0)
 function deterministicRandomFloat(index: number, seed: number): number {
   const input = BigInt(index) + (BigInt(seed) * 0x10000n);
   const h = splitmix64(input);
   const mask = 0x1FFFFFFFFFFFFFn;
   return Number(h & mask) / Number(mask);
 }
-// -------------------------------------------
 
 export class GameEngine {
 
@@ -89,22 +82,16 @@ export class GameEngine {
 
     state.tick++;
 
-    // 0. AUTO START
     if (ball.velocity.x === 0 && ball.velocity.y === 0) {
         this.resetBall(state); 
     }
 
-    // 1. Process P1 Input
     this.processPaddle(p1, p1Input);
-
-    // 2. Process P2 Input
     this.processPaddle(p2, p2Input);
 
-    // 3. Ball Movement
     ball.position.x += ball.velocity.x * STEP_TIME;
     ball.position.y += ball.velocity.y * STEP_TIME;
 
-    // 4. Wall Collisions
     if (ball.position.x <= 0) {
       ball.position.x = 0;
       ball.velocity.x *= -1;
@@ -113,7 +100,6 @@ export class GameEngine {
       ball.velocity.x *= -1;
     }
 
-    // 5. Scoring
     if (ball.position.y <= 0) {
       state.score.player++;
       state.rounds++;
@@ -124,37 +110,21 @@ export class GameEngine {
       this.resetBall(state);
     }
 
-    // 6. Paddle Collisions
     this.checkPaddleCollision(ball, p1);
     this.checkPaddleCollision(ball, p2);
   }
 
-  // Helper to handle both Keyboard (Boolean) and Touch (Absolute) inputs
   private processPaddle(paddle: Entity, input: ClientInput | undefined) {
     if (!input) return;
 
-    // A. Absolute Position Logic (Touch/Mouse)
-    if (input.targetX !== undefined) {
-        // We want the CENTER of the paddle to match targetX
-        const currentCenterX = paddle.position.x + paddle.width / 2;
-        const diff = input.targetX - currentCenterX;
-        const maxStep = PADDLE_SPEED * STEP_TIME;
-
-        // If close enough, snap exactly to target to prevent jitter
-        if (Math.abs(diff) <= maxStep) {
-            paddle.position.x += diff;
-        } else {
-            // Move towards target at max speed
-            paddle.position.x += Math.sign(diff) * maxStep;
-        }
+    if (input.targetX !== undefined && input.targetX !== null && !isNaN(input.targetX)) {
+        paddle.position.x = input.targetX - paddle.width / 2;
     } 
-    // B. Relative Logic (Keyboard)
     else {
         if (input.left) paddle.position.x -= PADDLE_SPEED * STEP_TIME;
         if (input.right) paddle.position.x += PADDLE_SPEED * STEP_TIME;
     }
 
-    // Clamp to screen bounds
     paddle.position.x = Math.max(0, Math.min(GAME_WIDTH - paddle.width, paddle.position.x));
   }
 

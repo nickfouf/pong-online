@@ -1,9 +1,9 @@
 import { io, Socket } from "socket.io-client";
 import { MatchInitData, ClientInput, GameState } from "../game/types";
 
-const SERVER_URL = "https://pong-online-rs91.onrender.com";//`${window.location.protocol}//${window.location.hostname}:${window.location.port}`;
+const SERVER_URL = window.location.protocol === "https:" ? "https://pong-online-rs91.onrender.com" : `${window.location.protocol}//${window.location.hostname}:${window.location.port}`;
 export let socket: Socket;
-
+console.log("Connecting to server at:", SERVER_URL);
 export const initSocket = () => {
   if (socket) return;
   socket = io(SERVER_URL, { transports: ["websocket"], reconnection: true });
@@ -18,16 +18,9 @@ export const onMatchStart = (callback: (data: MatchInitData) => void) => {
   socket.on("match-start", callback);
 };
 
-export const onRemoteInput = (callback: (data: { 
-    role: "p1" | "p2", 
-    input: ClientInput,
-    serverState: GameState 
-}) => void) => {
-  socket.on("remote-input", callback);
-};
-
-export const onSyncEvent = (callback: (data: { type: string, state: GameState }) => void) => {
-  socket.on("sync-event", callback);
+// --- NEW: Receive Full State Updates ---
+export const onServerTick = (callback: (state: GameState) => void) => {
+  socket.on("server-tick", callback);
 };
 
 export const sendInput = (roomId: string, input: ClientInput) => {
@@ -39,7 +32,6 @@ export const onGameOver = (callback: (reason: string) => void) => {
   socket.on("game-over", callback);
 };
 
-// --- NEW FUNCTION ---
 export const onDisconnect = (callback: (reason: string) => void) => {
   socket.on("disconnect", callback);
 };
