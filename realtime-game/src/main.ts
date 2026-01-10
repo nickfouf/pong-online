@@ -38,6 +38,7 @@ import {
   let gameActive = false;
   
   let simulatedState: GameState | null = null;
+  // REMOVED: prevSimulatedState
   
   // CLIENT PREDICTION STATE
   let pendingInputs: ClientInput[] = [];
@@ -66,6 +67,7 @@ import {
     renderer.hideUI();
     renderer.setMirrored(myRole === 'p2');
     renderer.setBackgroundActive(true);
+    
     simulatedState = engine.createInitialState(data.seed);
   });
 
@@ -73,23 +75,15 @@ import {
     if (!simulatedState || !myRole) return;
 
     // 1. RECONCILIATION
-    // Set our base state to exactly what the server says it is (Authoritative)
     simulatedState = engine.cloneState(serverState);
-
-    // 2. Discard inputs that the server has definitively processed
-    // (Inputs with a tick <= serverState.tick are already baked into serverState)
+    
+    // 2. Discard processed inputs
     pendingInputs = pendingInputs.filter(input => input.tick > serverState.tick);
 
     // 3. REPLAY PREDICTIONS
-    // Re-apply all local inputs that the server hasn't seen yet
-    // to bring our local state back to the "future"
     for (const input of pendingInputs) {
         const p1Input = myRole === 'p1' ? input : undefined;
         const p2Input = myRole === 'p2' ? input : undefined;
-        
-        // Note: We don't have the opponent's inputs for these future frames yet,
-        // so they will momentarily stand still during replay until the next server update.
-        // This is the trade-off for client-side prediction.
         engine.step(simulatedState, p1Input, p2Input);
     }
   });
@@ -109,8 +103,6 @@ import {
   });
 
   // GAME LOOP
-  // Using ticker.add with deltaMS to create a Fixed Time Step loop
-  // This ensures physics runs at 60Hz even if monitor is 144Hz or 30Hz
   app.ticker.add((ticker) => {
     if (!gameActive || !simulatedState || !roomId || !myRole) return;
 
@@ -118,6 +110,7 @@ import {
     accumulator += ticker.deltaMS / 1000;
 
     // Consume accumulator in fixed chunks (STEP_TIME = 1/60)
+    // This ensures physics run consistently regardless of screen Hz
     while (accumulator >= STEP_TIME) {
         
         // 1. INPUT GATHERING
@@ -156,8 +149,6 @@ import {
         pendingInputs.push(myInput);
 
         // 4. NETWORK SENDING
-        // Only send if input changed to save bandwidth, or if targetX is active (mouse dragging)
-        // We detect changes compared to the last thing we actually *sent* over the socket.
         const prevTargetX = lastSentInput?.targetX;
         const currTargetX = myInput.targetX;
 
@@ -177,8 +168,8 @@ import {
         accumulator -= STEP_TIME;
     }
 
-    // 5. RENDER
-    // Render the interpolated state (or just the current snapped state)
+    // 5. RENDER (Directly)
+    // We no longer calculate alpha. We just render the state as it is.
     renderer.render(simulatedState);
   });
 

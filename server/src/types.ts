@@ -26,6 +26,7 @@ export interface GameState {
   tick: number; // Current Logic Tick
   seed: number; // Master Seed for this match
   rounds: number; // Counter for how many times ball was reset
+  waitingTimer: number; // <--- NEW: Logic ticks to wait before launching ball
   entities: Record<string, Entity>;
   score: {
     player: number;
@@ -37,7 +38,7 @@ export interface ClientInput {
   tick: number; // Input applied for this specific tick
   left: boolean;
   right: boolean;
-  targetX?: number; // <--- NEW: Optional absolute position target
+  targetX?: number; // Optional absolute position target
 }
 
 export interface MatchInitData {
@@ -46,3 +47,4 @@ export interface MatchInitData {
   serverTime: number; // To calculate offset
   seed: number; // The master seed sent from server
 }
+

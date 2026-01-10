@@ -12,7 +12,7 @@ export class GameRenderer {
   
   // Background Elements
   private bgSprite: Sprite | null = null;
-  private targetBgAlpha: number = 0; // Control for fade in/out
+  private targetBgAlpha: number = 0; 
 
   // UI Elements
   private debugText: Text;
@@ -29,26 +29,19 @@ export class GameRenderer {
     this.gameContainer = new Container();
     this.uiContainer = new Container();
     
-    // --- BACKGROUND LAYERS ---
-    
     // Layer 0: Black Background Fill
     const bgFill = new Graphics()
         .rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
         .fill(0x000000);
     this.gameContainer.addChild(bgFill);
 
-    // Layer 1: Background Image (Inserted asynchronously later at index 1)
-    
     // Layer 2: White Border
-    // We add this now so it sits at index 1 initially. 
-    // When the image loads, we will insert the image at index 1, pushing this to index 2.
-    // This ensures the border is rendered OVER the background image.
     const bgBorder = new Graphics()
         .rect(0, 0, GAME_WIDTH, GAME_HEIGHT)
         .stroke({ width: 4, color: 0xFFFFFF });
     this.gameContainer.addChild(bgBorder);
 
-    // Center pivot for easier scaling/rotation
+    // Center pivot
     this.gameContainer.pivot.set(GAME_WIDTH / 2, GAME_HEIGHT / 2);
 
     this.loadBackground();
@@ -78,7 +71,6 @@ export class GameRenderer {
     // 4. Fade Animation Loop
     this.app.ticker.add(() => {
         if (this.bgSprite) {
-            // Smoothly interpolate alpha towards target
             const speed = 0.02;
             if (Math.abs(this.bgSprite.alpha - this.targetBgAlpha) > 0.001) {
                 if (this.bgSprite.alpha < this.targetBgAlpha) {
@@ -97,22 +89,13 @@ export class GameRenderer {
     try {
         const texture = await Assets.load('/assets/background.png');
         this.bgSprite = new Sprite(texture);
-
-        // Calculate Scale (Contain Object Fit)
         const scale = Math.min(GAME_WIDTH / texture.width, GAME_HEIGHT / texture.height);
-        
         this.bgSprite.scale.set(scale);
-        this.bgSprite.anchor.set(0.5); // Center origin
+        this.bgSprite.anchor.set(0.5); 
         this.bgSprite.x = GAME_WIDTH / 2;
         this.bgSprite.y = GAME_HEIGHT / 2;
-        
-        // Initial Alpha 0 (Hidden)
         this.bgSprite.alpha = 0;
-
-        // Insert at Index 1 (Between Black Fill and White Border)
-        // [0: Fill, 1: Border] -> [0: Fill, 1: Sprite, 2: Border]
         this.gameContainer.addChildAt(this.bgSprite, 1);
-
     } catch (e) {
         console.warn("Failed to load background image:", e);
     }
@@ -140,11 +123,9 @@ export class GameRenderer {
   private updatePointerPos(e: FederatedPointerEvent) {
     const local = this.gameContainer.toLocal(e.global);
     let x = local.x;
-
     if (this.isMirrored) {
         x = GAME_WIDTH - x;
     }
-
     this.targetGameX = Math.max(0, Math.min(GAME_WIDTH, x));
   }
 
@@ -153,7 +134,6 @@ export class GameRenderer {
   }
 
   // --- UI SCREENS ---
-
   public showStartScreen(onFindMatch: () => void) {
     this.clearUI();
     this.menuContainer = new Container();
@@ -208,7 +188,6 @@ export class GameRenderer {
     this.clearUI();
     this.menuContainer = new Container();
 
-    // CHANGED: Use GAME_WIDTH to ensure the background width matches the game board exactly
     const bg = new Graphics()
         .rect(-GAME_WIDTH / 2, -200, GAME_WIDTH, 400)
         .fill({ color: 0x000000, alpha: 0.9 })
@@ -239,8 +218,6 @@ export class GameRenderer {
     this.resize();
   }
 
-  // --- HELPERS ---
-
   private clearUI() {
     if (this.menuContainer) {
         this.menuContainer.destroy({ children: true });
@@ -264,15 +241,12 @@ export class GameRenderer {
     text.anchor.set(0.5);
 
     btn.addChild(bg, text);
-
     btn.on('pointerdown', onClick);
     btn.on('pointerover', () => { bg.alpha = 0.8; });
     btn.on('pointerout', () => { bg.alpha = 1; });
 
     return btn;
   }
-
-  // --- RENDERING & RESIZING ---
 
   public resize() {
     const screenW = this.app.screen.width;
@@ -290,16 +264,16 @@ export class GameRenderer {
     this.gameContainer.position.set(screenW / 2, screenH / 2);
 
     if (this.menuContainer) {
-        // CHANGED: Apply scale to UI as well
         this.menuContainer.scale.set(scale);
         this.menuContainer.position.set(screenW / 2, screenH / 2);
     }
   }
 
-  public render(state: GameState) {
+  // --- CHANGED: REMOVED INTERPOLATION ---
+  public render(currState: GameState) {
     const activeIds = new Set<string>();
 
-    Object.values(state.entities).forEach((entity) => {
+    Object.values(currState.entities).forEach((entity) => {
       activeIds.add(entity.id);
       let sprite = this.sprites.get(entity.id);
 
@@ -316,9 +290,9 @@ export class GameRenderer {
         this.sprites.set(entity.id, sprite);
       }
 
-      // Calculate Position
-      let x = entity.position.x;
-      let y = entity.position.y;
+      // No interpolation, strictly use current X and Y
+      const x = entity.position.x;
+      const y = entity.position.y;
 
       if (this.isMirrored) {
         if (entity.type === 'ball') {
@@ -347,6 +321,6 @@ export class GameRenderer {
       }
     }
 
-    this.debugText.text = `Tick: ${state.tick} | P1: ${state.score.player} | P2: ${state.score.opponent}`;
+    this.debugText.text = `Tick: ${currState.tick} | P1: ${currState.score.player} | P2: ${currState.score.opponent}`;
   }
 }

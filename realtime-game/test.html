@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>1v1 Passe-Trappe - NetplayJS + Planck</title>
+    <style>
+        body { margin: 0; background: #222; color: white; font-family: sans-serif; overflow: hidden; }
+        #canvas-container { display: flex; justify-content: center; align-items: center; height: 100vh; flex-direction: column; }
+        canvas { background: #333; border: 4px solid #555; box-shadow: 0 0 20px black; }
+        #status { margin-bottom: 10px; color: #00ffcc; }
+    </style>
+
+    <!-- 1. Import Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/planck-js@0.3.31/dist/planck.min.js"></script>
+    <script src="https://unpkg.com/netplayjs@0.4.1/dist/netplay.min.js"></script>
+</head>
+<body>
+
+<div id="canvas-container">
+    <div id="status">initializing...</div>
+    <!-- We will attach the canvas here via JS -->
+</div>
+
+<script>
+    // --- CONFIGURATION ---
+    const TIMESTEP = 1/60;
+    const SCALE = 40; // 40 pixels = 1 meter in physics world
+    const WIDTH = 800;
+    const HEIGHT = 500;
+
+    // Physics World Dimensions (Meters)
+    const W_M = WIDTH / SCALE;
+    const H_M = HEIGHT / SCALE;
+
+    // --- PHYSICS HELPERS ---
+    // We use a helper to keep code clean.
+    // Planck.js is verbose; this makes it easier to read.
+    function createWall(world, x, y, w, h) {
+        const body = world.createBody({ type: 'static', position: planck.Vec2(x, y) });
+        body.createFixture(planck.Box(w / 2, h / 2));
+        return body;
+    }
+
+    function createPuck(world, x, y, radius) {
+        const body = world.createBody({
+            type: 'dynamic',
+            position: planck.Vec2(x, y),
+            linearDamping: 2.0, // Friction (air hockey feel)
+            bullet: true // CRITICAL: Prevents tunneling through walls at high speed
+        });
+        body.createFixture(planck.Circle(radius), {
+            density: 1.0,
+            restitution: 0.6, // Bounciness
+            friction: 0.1
+        });
+        return body;
+    }
+
+    // --- THE GAME CLASS ---
+    class PasseTrappe extends netplayjs.Game {
+        // 1. Initialize the World (State)
+        constructor() {
+            super();
+
+            // Create Physics World (No gravity for top-down air hockey)
+            this.world = planck.World(planck.Vec2(0, 0));
+
+            // Store references to sync later
+            this.pucks = [];
+
+            // -- MAP SETUP --
+            const wallThick = 0.5; // meters
+
+            // Outer Walls
+            createWall(this.world, W_M/2, -wallThick/2, W_M, wallThick); // Top
+            createWall(this.world, W_M/2, H_M + wallThick/2, W_M, wallThick); // Bottom
+            createWall(this.world, -wallThick/2, H_M/2, wallThick, H_M); // Left
+            createWall(this.world, W_M + wallThick/2, H_M/2, wallThick, H_M); // Right
+
+            // The Center Barrier (The "Trappe")
+            const gapSize = 2.5; // Size of the hole
+            const midX = W_M / 2;
+            const topWallH = (H_M - gapSize) / 2;
+
+            // Top part of middle wall
+            createWall(this.world, midX, topWallH/2, 0.2, topWallH);
+            // Bottom part of middle wall
+            createWall(this.world, midX, H_M - topWallH/2, 0.2, topWallH);
+
+            // -- CREATE PUCKS --
+            // 3 pucks on left, 3 on right
+            for(let i=0; i<3; i++) {
+                this.pucks.push(createPuck(this.world, 2, 2 + i * 1.5, 0.4)); // Left side
+                this.pucks.push(createPuck(this.world, W_M - 2, 2 + i * 1.5, 0.4)); // Right side
+            }
+        }
+
+        // 2. Define Inputs (What do we send over network?)
+        // NetplayJS handles sending this to the other player
+        static readInput() {
+            // We read the global mouse state stored on the canvas
+            return {
+                x: (window.mouseX || 0) / SCALE, // Convert pixels to meters
+                y: (window.mouseY || 0) / SCALE,
+                isDown: window.mouseDown || false
+            };
+        }
+
+        // 3. The Tick Loop (Logic)
+        // This runs for BOTH players locally.
+        tick(playerInputs) {
+            // playerInputs is a Map: PlayerID -> InputObject
+            for (const [playerID, input] of playerInputs) {
+                if (input.isDown) {
+                    // Logic: Find nearest puck and pull it
+                    let nearest = null;
+                    let minDist = 2.0; // Max reach distance (meters)
+
+                    for (let p of this.pucks) {
+                        const pos = p.getPosition();
+                        const dist = planck.Vec2.distance(pos, planck.Vec2(input.x, input.y));
+                        if (dist < minDist) {
+                            minDist = dist;
+                            nearest = p;
+                        }
+                    }
+
+                    if (nearest) {
+                        // Apply force towards mouse (Magnetic Finger)
+                        const forceDir = planck.Vec2(input.x, input.y).sub(nearest.getPosition());
+                        forceDir.normalize();
+                        forceDir.mul(60.0); // Strength of pull
+                        nearest.applyForceToCenter(forceDir);
+                        nearest.setAwake(true);
+                    }
+                }
+            }
+
+            // Step Physics
+            this.world.step(TIMESTEP);
+        }
+
+        // 4. Save State (Serialization)
+        // Needed for Rollback. We must save the physics state perfectly.
+        serialize() {
+            return {
+                // We map over pucks and save their Pos(x,y) and Vel(x,y)
+                p: this.pucks.map(b => ({
+                    p: b.getPosition(),
+                    v: b.getLinearVelocity(),
+                    a: b.getAngle(),
+                    av: b.getAngularVelocity()
+                }))
+            };
+        }
+
+        // 5. Load State (Deserialization)
+        // If lag happens, NetplayJS rewinds time and calls this to reset physics.
+        deserialize(state) {
+            state.p.forEach((data, i) => {
+                const body = this.pucks[i];
+                body.setPosition(data.p);
+                body.setLinearVelocity(data.v);
+                body.setAngle(data.a);
+                body.setAngularVelocity(data.av);
+            });
+        }
+
+        // 6. Rendering (Visuals only)
+        draw(canvas) {
+            const ctx = canvas.getContext("2d");
+
+            // Clear Background
+            ctx.fillStyle = "#333";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Board Details
+            ctx.save();
+            ctx.scale(SCALE, SCALE); // Scale everything to meters
+
+            // Draw Center Line
+            ctx.strokeStyle = "#555";
+            ctx.lineWidth = 0.05;
+            ctx.beginPath();
+            ctx.moveTo(W_M/2, 0);
+            ctx.lineTo(W_M/2, H_M);
+            ctx.stroke();
+
+            // Draw Walls (Visual representation of the gap)
+            ctx.fillStyle = "#888";
+            const gapSize = 2.5;
+            const topWallH = (H_M - gapSize) / 2;
+            ctx.fillRect((W_M/2)-0.1, 0, 0.2, topWallH); // Top mid wall
+            ctx.fillRect((W_M/2)-0.1, H_M - topWallH, 0.2, topWallH); // Bot mid wall
+
+            // Draw Pucks
+            for (let p of this.pucks) {
+                const pos = p.getPosition();
+                const r = 0.4; // Radius we set earlier
+
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+
+                // Color based on side (approximate)
+                ctx.fillStyle = pos.x < W_M/2 ? "#ff4757" : "#1e90ff";
+                ctx.fill();
+                ctx.strokeStyle = "white";
+                ctx.lineWidth = 0.05;
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+    }
+
+    // --- SETUP INPUT LISTENERS ---
+    // We attach these to the window so the Game class can read them in readInput()
+    window.mouseX = 0;
+    window.mouseY = 0;
+    window.mouseDown = false;
+
+    // Wait for the NetplayJS canvas to exist, or capture globally
+    document.addEventListener('mousemove', e => {
+        const canvas = document.querySelector('canvas');
+        if(canvas) {
+            const rect = canvas.getBoundingClientRect();
+            window.mouseX = e.clientX - rect.left;
+            window.mouseY = e.clientY - rect.top;
+        }
+    });
+    document.addEventListener('mousedown', () => window.mouseDown = true);
+    document.addEventListener('mouseup', () => window.mouseDown = false);
+
+    // --- START THE GAME ---
+    // Using Rollback Wrapper for that smooth network feel
+    const wrapper = new netplayjs.RollbackWrapper(PasseTrappe, {
+        canvasWidth: WIDTH,
+        canvasHeight: HEIGHT,
+        timestep: 1000 / 60, // 60 FPS
+    });
+
+    wrapper.start();
+
+    // UI Feedback
+    const statusDiv = document.getElementById('status');
+    statusDiv.innerHTML = "Waiting for connection... Copy the URL to a new tab!";
+
+    wrapper.on('connected', () => {
+        statusDiv.innerHTML = "Connected! Game On.";
+        statusDiv.style.color = "#00ff00";
+    });
+</script>
+
+</body>
+</html>

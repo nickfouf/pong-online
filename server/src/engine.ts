@@ -1,9 +1,8 @@
-import { GameState, Entity, ClientInput, GAME_WIDTH, GAME_HEIGHT, STEP_TIME } from "./types";
+import { GameState, Entity, ClientInput, GAME_WIDTH, GAME_HEIGHT, STEP_TIME, TICK_RATE } from "./types";
 
 const PADDLE_WIDTH = 100;
 const PADDLE_HEIGHT = 20;
 const BALL_SIZE = 20;
-// CHANGED: Reduced from 1500 to 600 to make arrow movement smoother/slower
 const PADDLE_SPEED = 600; 
 export const BALL_SPEED = 450; 
 
@@ -39,6 +38,7 @@ export class GameEngine {
       tick: 0,
       seed: seed,
       rounds: 0,
+      waitingTimer: TICK_RATE, // Start with 1 second delay (60 ticks)
       width: GAME_WIDTH,
       entities: {
         p1: {
@@ -74,7 +74,29 @@ export class GameEngine {
   }
 
   public cloneState(state: GameState): GameState {
-    return JSON.parse(JSON.stringify(state));
+    const newState: GameState = {
+        tick: state.tick,
+        seed: state.seed,
+        rounds: state.rounds,
+        waitingTimer: state.waitingTimer, // Copy timer
+        entities: {}, 
+        score: { ...state.score }, 
+    } as any;
+
+    // Deep copy entities manually
+    for (const id in state.entities) {
+        const ent = state.entities[id];
+        newState.entities[id] = {
+            id: ent.id,
+            type: ent.type,
+            position: { x: ent.position.x, y: ent.position.y },
+            velocity: { x: ent.velocity.x, y: ent.velocity.y },
+            width: ent.width,
+            height: ent.height,
+            color: ent.color
+        };
+    }
+    return newState;
   }
 
   public step(state: GameState, p1Input: ClientInput | undefined, p2Input: ClientInput | undefined): void {
@@ -84,61 +106,70 @@ export class GameEngine {
 
     state.tick++;
 
-    // 0. AUTO START
-    if (ball.velocity.x === 0 && ball.velocity.y === 0) {
-        this.resetBall(state); 
-    }
-
-    // 1. Process P1 Input
+    // 1. Process Paddle Inputs (Always allow movement, even during wait)
     this.processPaddle(p1, p1Input);
-
-    // 2. Process P2 Input
     this.processPaddle(p2, p2Input);
 
-    // 3. Ball Movement
-    ball.position.x += ball.velocity.x * STEP_TIME;
-    ball.position.y += ball.velocity.y * STEP_TIME;
+    // 2. Ball Logic
+    if (state.waitingTimer > 0) {
+        // --- WAITING PHASE ---
+        state.waitingTimer--;
+        
+        if (state.waitingTimer === 0) {
+            this.launchBall(state);
+        }
+    } else {
+        // --- ACTIVE PHASE ---
+        
+        // Failsafe: If ball stopped and no timer, reset (Auto Start Fallback)
+        if (ball.velocity.x === 0 && ball.velocity.y === 0) {
+            this.resetBall(state); 
+            return;
+        }
 
-    // 4. Wall Collisions
-    if (ball.position.x <= 0) {
-      ball.position.x = 0;
-      ball.velocity.x *= -1;
-    } else if (ball.position.x + ball.width >= GAME_WIDTH) {
-      ball.position.x = GAME_WIDTH - ball.width;
-      ball.velocity.x *= -1;
+        // Move Ball
+        ball.position.x += ball.velocity.x * STEP_TIME;
+        ball.position.y += ball.velocity.y * STEP_TIME;
+
+        // Wall Collisions
+        if (ball.position.x <= 0) {
+            ball.position.x = 0;
+            ball.velocity.x *= -1;
+        } else if (ball.position.x + ball.width >= GAME_WIDTH) {
+            ball.position.x = GAME_WIDTH - ball.width;
+            ball.velocity.x *= -1;
+        }
+
+        // Scoring
+        if (ball.position.y <= 0) {
+            state.score.player++;
+            state.rounds++;
+            this.resetBall(state);
+        } else if (ball.position.y + ball.height >= GAME_HEIGHT) {
+            state.score.opponent++;
+            state.rounds++;
+            this.resetBall(state);
+        }
+
+        // Paddle Collisions
+        this.checkPaddleCollision(ball, p1);
+        this.checkPaddleCollision(ball, p2);
     }
-
-    // 5. Scoring
-    if (ball.position.y <= 0) {
-      state.score.player++;
-      state.rounds++;
-      this.resetBall(state);
-    } else if (ball.position.y + ball.height >= GAME_HEIGHT) {
-      state.score.opponent++;
-      state.rounds++;
-      this.resetBall(state);
-    }
-
-    // 6. Paddle Collisions
-    this.checkPaddleCollision(ball, p1);
-    this.checkPaddleCollision(ball, p2);
   }
 
-    // server/src/engine.ts
+  private processPaddle(paddle: Entity, input: ClientInput | undefined) {
+      if (!input) return;
 
-    private processPaddle(paddle: Entity, input: ClientInput | undefined) {
-        if (!input) return;
+      if (input.targetX !== undefined && input.targetX !== null && !isNaN(input.targetX)) {
+          paddle.position.x = input.targetX - paddle.width / 2;
+      }
+      else {
+          if (input.left) paddle.position.x -= PADDLE_SPEED * STEP_TIME;
+          if (input.right) paddle.position.x += PADDLE_SPEED * STEP_TIME;
+      }
 
-        if (input.targetX !== undefined && input.targetX !== null && !isNaN(input.targetX)) {
-            paddle.position.x = input.targetX - paddle.width / 2;
-        }
-        else {
-            if (input.left) paddle.position.x -= PADDLE_SPEED * STEP_TIME;
-            if (input.right) paddle.position.x += PADDLE_SPEED * STEP_TIME;
-        }
-
-        paddle.position.x = Math.max(0, Math.min(GAME_WIDTH - paddle.width, paddle.position.x));
-    }
+      paddle.position.x = Math.max(0, Math.min(GAME_WIDTH - paddle.width, paddle.position.x));
+  }
 
   private checkPaddleCollision(ball: Entity, paddle: Entity) {
     if (
@@ -158,10 +189,21 @@ export class GameEngine {
     }
   }
 
+  // Resets ball to center and starts the wait timer
   private resetBall(state: GameState) {
     const ball = state.entities["ball"];
     ball.position.x = GAME_WIDTH / 2 - ball.width / 2;
     ball.position.y = GAME_HEIGHT / 2;
+    ball.velocity.x = 0;
+    ball.velocity.y = 0;
+    
+    // Set timer to wait 1 second (60 ticks)
+    state.waitingTimer = TICK_RATE;
+  }
+
+  // Calculates velocity and launches ball
+  private launchBall(state: GameState) {
+    const ball = state.entities["ball"];
     
     const dirVal = deterministicRandomInt(state.rounds * 10, state.seed, 0, 1);
     const directionY = dirVal === 0 ? -1 : 1;
@@ -172,3 +214,4 @@ export class GameEngine {
     ball.velocity.x = velocityX;
   }
 }
+
