@@ -1,7 +1,7 @@
 import { Application } from "pixi.js";
 import { GameRenderer } from "./game/renderer";
 import { GameEngine } from "./game/engine";
-import { GameState, MatchInitData, ClientInput, TICK_RATE } from "./game/types";
+import { GameState, MatchInitData, ClientInput } from "./game/types";
 import {
     initSocket,
     findMatch,
@@ -11,8 +11,6 @@ import {
     onGameOver,
     onDisconnect
 } from "./lib/socket";
-
-const MS_PER_TICK = 1000 / TICK_RATE;
 
 (async () => {
   const app = new Application();
@@ -87,8 +85,8 @@ const MS_PER_TICK = 1000 / TICK_RATE;
     if (!gameActive || !simulatedState || !roomId || !myRole) return;
 
     // 1. INPUT GATHERING
-    let wantsLogicLeft = false;
-    let wantsLogicRight = false;
+    let wantsLogicLeft;
+    let wantsLogicRight;
     let targetX: number | undefined = undefined;
 
     // Priority: Touch/Mouse > Keyboard
