@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Text, TextStyle, FederatedPointerEvent } from "pixi.js";
+import { Application, Container, Graphics, Text, TextStyle, FederatedPointerEvent, Assets, Sprite } from "pixi.js";
 import { GameState, GAME_WIDTH, GAME_HEIGHT } from "./types";
 
 export class GameRenderer {
@@ -35,6 +35,9 @@ export class GameRenderer {
     this.gameContainer.pivot.set(GAME_WIDTH / 2, GAME_HEIGHT / 2);
     this.gameContainer.addChild(bg);
 
+    // Load Background Image
+    this.loadBackground();
+
     this.app.stage.addChild(this.gameContainer);
     this.app.stage.addChild(this.uiContainer);
 
@@ -56,6 +59,30 @@ export class GameRenderer {
     this.app.stage.on('pointermove', this.onPointerMove.bind(this));
     this.app.stage.on('pointerup', this.onPointerUp.bind(this));
     this.app.stage.on('pointerupoutside', this.onPointerUp.bind(this));
+  }
+
+  private async loadBackground() {
+    try {
+        const texture = await Assets.load('/assets/background.png');
+        const bgSprite = new Sprite(texture);
+
+        // Calculate Scale (Contain Object Fit)
+        // We want the image to fit entirely within GAME_WIDTH x GAME_HEIGHT
+        const scale = Math.min(GAME_WIDTH / texture.width, GAME_HEIGHT / texture.height);
+        
+        bgSprite.scale.set(scale);
+        bgSprite.anchor.set(0.5); // Center origin
+        bgSprite.x = GAME_WIDTH / 2;
+        bgSprite.y = GAME_HEIGHT / 2;
+        
+        // Add to container at index 1
+        // Index 0 is the black Graphics rect
+        // We want the image ON TOP of the black rect, but BEHIND any game entities
+        this.gameContainer.addChildAt(bgSprite, 1);
+
+    } catch (e) {
+        console.warn("Failed to load background image:", e);
+    }
   }
 
   private onPointerDown(e: FederatedPointerEvent) {
@@ -300,4 +327,3 @@ export class GameRenderer {
     this.debugText.text = `Tick: ${state.tick} | P1: ${state.score.player} | P2: ${state.score.opponent}`;
   }
 }
-
